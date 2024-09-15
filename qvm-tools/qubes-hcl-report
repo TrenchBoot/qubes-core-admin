@@ -200,6 +200,8 @@ fi
 QUBES_VER=$(cut -d ' ' -f3 "$TEMP_DIR/qubes-release")
 KERNEL=$(uname -r |cut -d '.' -f-3)
 CPU=$(grep "model name" "$TEMP_DIR/cpuinfo" |sort -u |cut -d ' ' -f3- |sed -e "s/[[:space:]]*/\  /")
+CPU_INTEL=$(grep "GenuineIntel" "$TEMP_DIR/cpuinfo")
+CPU_AMD=$(grep "AuthenticAMD" "$TEMP_DIR/cpuinfo")
 CHIPSET=$(grep "00:00.0.*Host bridge" "$TEMP_DIR/lspci" |cut -d ':' -f3- |sed -e "s/[[:space:]]*/\  /")
 VGA=$(grep -E 'VGA|Display' "$TEMP_DIR/lspci" |cut -d ':' -f3- |sed -e "s/^[[:space:]]*/\  /")
 NET=$(grep -E 'Network|Ethernet' "$TEMP_DIR/lspci" |cut -d ':' -f3- |sed -e "s/^[[:space:]]*/\  /")
@@ -213,6 +215,15 @@ XL_VTX=$(grep xen_caps "$TEMP_DIR/xl-info"| grep hvm)
 XL_VTD=$(grep virt_caps "$TEMP_DIR/xl-info"|grep hvm_directio)
 XL_HAP=$(grep "$XL_DMESG_PREFIX_REGEX"'HVM: Hardware Assisted Paging (HAP) detected\( but disabled\)\?$' "$TEMP_DIR/xl-dmesg")
 XL_REMAP=$(grep "$XL_DMESG_PREFIX_REGEX"'\(Intel VT-d Interrupt Remapping enabled\|Interrupt remapping enabled\)' "$TEMP_DIR/xl-dmesg")
+
+if [[ $CPU_INTEL ]]; then
+    XL_CPU_SMX=$(grep "$XL_DMESG_PREFIX_REGEX"'CPU: SMX capability supported' "$TEMP_DIR/xl-dmesg")
+    XL_CHIPSET_TXT=$(grep "$XL_DMESG_PREFIX_REGEX"'Chipset supports TXT' "$TEMP_DIR/xl-dmesg")
+fi
+
+if [[ $CPU_AMD ]]; then
+    XL_CPU_SKINIT=$(grep "$XL_DMESG_PREFIX_REGEX"'CPU: SKINIT capability supported' "$TEMP_DIR/xl-dmesg")
+fi
 
 CERTIFIED=no
 if [ "$BRAND" = "Micro-Star International Co., Ltd." ] && [ "$PRODUCT" = "MS-7D25" ] && [[ "$BIOS" = "Dasharo"* ]]; then
@@ -300,6 +311,36 @@ if [[ $XL_REMAP ]]
     REMAP="no"
 fi
 
+DRTM="no"
+if [[ $CPU_INTEL ]]; then
+    if [[ $XL_CPU_SMX ]]; then
+        if [[ $XL_CHIPSET_TXT ]];then
+            DRTM="yes"
+        fi
+    fi
+elif [[ $CPU_AMD ]]; then
+    if [[ $XL_CPU_SKINIT ]]; then
+        DRTM="yes"
+    fi
+fi
+
+AEM_STATUS="Unknown"
+if [[ "$DRTM" == "yes" ]]; then
+    if dnf list --installed anti-evil-maid >/dev/null 2>&1; then
+        AEM_STATUS="Installed"
+        if [[ $(systemctl status anti-evil-maid-unseal | grep "status=0/SUCCESS") ]]; then
+            AEM_STATUS="Active"
+        else
+            AEM_STATUS="Inactive or failed"
+        fi
+    else
+        AEM_STATUS="Not installed"
+    fi
+else
+    AEM_STATUS="Unsupported"
+fi
+
+
 READABLE_OUTPUT="
 Qubes release $QUBES_VER
 
@@ -329,6 +370,8 @@ HVM:\t\t$VTX
 I/O MMU:\t$VTD
 HAP/SLAT:\t$HAP_VERBOSE
 TPM:\t\t$TPM
+DRTM:\t\t$DRTM
+AEM:\t\t$AEM_STATUS
 Remapping:\t$REMAP
 Certified:\t$CERTIFIED
 "
@@ -346,6 +389,10 @@ slat:
   '$HAP'
 tpm:
   '$TPM_s'
+drtm:
+  '$DRTM'
+aem: |
+  $AEM_STATUS
 remap:
   '$REMAP'
 brand: |
